@@ -1,0 +1,23 @@
+# --- SEGURANÇA (Arquivos Críticos) ---
+.env
+active_trades.json
+trades_history.db
+
+# --- PYTHON (Arquivos Temporários) ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# --- INTERFACE E LOGS ---
+*.log
+.vscode/
+.idea/
+
+# --- SISTEMA ---
+.DS_Store
+Thumbs.db

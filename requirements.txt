@@ -1,0 +1,9 @@
+numpy
+pandas
+matplotlib
+requests
+python-dotenv
+ccxt
+tweepy
+vaderSentiment
+mplfinance
