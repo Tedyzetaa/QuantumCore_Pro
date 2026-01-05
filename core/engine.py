@@ -7,12 +7,13 @@ import time
 import os
 
 class TradingEngine:
-    def __init__(self, update_queue, config):
+    def __init__(self, update_queue, config, telegram=None):
         self.update_queue = update_queue
         self.config = config
         self.running = False
         self.active_trades = {}
         self.cooldown_list = {} # Guarda o tempo da última venda de cada moeda
+        self.telegram = telegram
         
         self.exchange = ccxt.binance({
             'apiKey': config.API_KEY, 
@@ -70,14 +71,24 @@ class TradingEngine:
             if s in self.active_trades and self.active_trades[s].get('status') != 'Pendente':
                 trade = self.active_trades[s]
                 entry_price = trade['entry']
+                entry_time = trade.get('time', time.time()) # Pega a hora da compra
                 profit = (price - entry_price) / entry_price
                 status = "COMPRADO"
 
+                # 1. Verificação de Take Profit
                 if profit >= self.config.TAKE_PROFIT:
-                    self.update_queue.put(('log', f"💰 TAKE PROFIT ATINGIDO: {s} ({profit*100:.2f}%)"))
+                    self.update_queue.put(('log', f"💰 TAKE PROFIT: {s} ({profit*100:.2f}%)"))
                     await self._sell(s, price)
-                    # ADICIONA O COOLDOWN DE 5 MINUTOS (300 segundos)
                     self.cooldown_list[s] = now + 300 
+                    return None
+
+                # 2. ZOMBIE KILLER (Nova/Reativada)
+                duration = now - entry_time
+                if duration >= self.config.ZOMBIE_TIMEOUT:
+                    self.update_queue.put(('log', f"🧟 ZOMBIE KILLER: Fechando {s} após {int(duration/3600)}h de tédio..."))
+                    await self._sell(s, price)
+                    await self._sell(s, price, reason="ZOMBIE")
+                    self.cooldown_list[s] = now + 600 # Cooldown maior para moedas zumbis
                     return None
             
             # --- LÓGICA DE COMPRA COM TRAVA DE 5 MINUTOS ---
@@ -105,28 +116,56 @@ class TradingEngine:
             return {'symbol': s, 'price': price, 'rsi': rsi, 'df': df, 'status': status, 'trade_info': self.active_trades.get(s)}
         except: return None
 
-    async def _sell(self, symbol, price):
-        if symbol not in self.active_trades: return
+    async def _sell(self, symbol, price, reason="PROFIT"):
         try:
+            if symbol not in self.active_trades: return
+            
+            # 1. Pega o saldo real diretamente da exchange para evitar erro de cache
+            bal = await self.exchange.fetch_balance()
+            coin = symbol.split('/')[0]
+            actual_balance = float(bal.get(coin, {}).get('free', 0))
+            
+            # 2. Compara com o que temos no JSON e usa o MENOR valor 
+            # (Segurança contra poeira/dust ou taxas de BNB)
+            qty_to_sell = min(float(self.active_trades[symbol]['qty']), actual_balance)
+            
+            # 3. USA TRUNCATE (Arredonda sempre para baixo conforme as regras da exchange)
+            # O CCXT já faz isso com amount_to_precision se o mercado estiver carregado
+            precise_qty = self.exchange.amount_to_precision(symbol, qty_to_sell)
+            
+            # Verificação extra: se após a precisão o valor ficou maior que o saldo, reduz um step
+            if float(precise_qty) > actual_balance:
+                market = self.exchange.market(symbol)
+                step_size = market['limits']['amount']['min']
+                precise_qty = self.exchange.amount_to_precision(symbol, actual_balance - step_size)
+
+            self.update_queue.put(('log', f"🔻 VENDA SEGURA: {symbol} Qtd: {precise_qty}"))
+            
+            order = await self.exchange.create_market_sell_order(symbol, precise_qty)
+            
+            self.update_queue.put(('log', f"✅ VENDA EXECUTADA: {symbol}"))
+            
             trade = self.active_trades[symbol]
-            qty = trade['qty']
-            # Ajuste de precisão (Binance exige isso)
-            qty = self.exchange.amount_to_precision(symbol, qty)
-            
-            self.update_queue.put(('log', f"🔻 VENDENDO {symbol}..."))
-            order = await self.exchange.create_market_sell_order(symbol, qty)
-            
-            # PnL Real
-            avg_price = float(order.get('average', price))
-            pnl = (avg_price - trade['entry']) * float(qty)
-            
-            self.update_queue.put(('log', f"✅ VENDA SUCESSO: {symbol} @ {avg_price} (PnL: ${pnl:.2f})"))
-            
-            del self.active_trades[symbol]
-            self._save_state()
+            pnl_pct = ((float(price) - float(trade['entry'])) / float(trade['entry'])) * 100
+            emoji = "💰" if "PROFIT" in reason else "🧟"
+            msg = f"{emoji} **VENDA EXECUTADA** ({reason})\n\n💎 Par: `{symbol}`\n📈 Lucro: *{pnl_pct:.2f}%*\n💰 Saída: `${price:.4f}`"
+            if self.telegram:
+                asyncio.create_task(self.telegram.send_notification(msg))
             
         except Exception as e:
-            self.update_queue.put(('log', f"❌ ERRO VENDA {symbol}: {e}"))
+            error_msg = str(e).lower()
+            if "insufficient balance" in error_msg:
+                self.update_queue.put(('log', f"⚠️ Saldo insuficiente para vender {symbol}. Removendo da memória..."))
+                # Se não tem saldo, não adianta tentar de novo. Removemos do JSON.
+            else:
+                self.update_queue.put(('log', f"❌ ERRO VENDA {symbol}: {e}"))
+                return False # Mantém no JSON para tentar de novo se for erro de rede
+        
+        # REMOÇÃO DA MEMÓRIA (Executa se vender com sucesso OU se der erro de saldo insuficiente)
+        if symbol in self.active_trades:
+            del self.active_trades[symbol]
+            self._save_state()
+        return True
 
     async def _buy(self, symbol, price):
         if not self.running: return
@@ -164,6 +203,10 @@ class TradingEngine:
             }
             self._save_state()
             self.update_queue.put(('log', f"🚀 COMPRA SUCESSO: {symbol} @ {real_price}"))
+            
+            msg = f"🟢 **COMPRA EXECUTADA**\n\n💎 Par: `{symbol}`\n💵 Preço: `${real_price:.4f}`\n🚀 Slots: {len(self.active_trades)}/2"
+            if self.telegram:
+                asyncio.create_task(self.telegram.send_notification(msg))
             
         except Exception as e:
             # Se der erro de mercado fechado aqui, o bot pausa o par por 1 minuto

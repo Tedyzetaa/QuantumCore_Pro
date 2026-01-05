@@ -1,23 +1,22 @@
-# 💎 QuantumCore Pro v45.0 - Elite Terminal
+# 💎 QuantumCore Pro v47.0 - Intelligence Edition
 
-O QuantumCore Pro é um bot de trading algorítmico de alta performance para Binance Spot, focado em estratégias de reversão de tendência usando RSI e Bandas de Bollinger.
+O QuantumCore Pro é um terminal de trading algorítmico avançado para Binance Spot, operando com estratégia de reversão à média e controle total via Telegram.
 
-## 🚀 Novas Funcionalidades (v44 & v45)
-- **Interface Responsiva**: Painéis redimensionáveis (PanedWindow) para melhor visualização.
-- **Gráficos Avançados**: Integração com `mplfinance` mostrando Bandas de Bollinger, Médias Móveis e **Linha Verde de Preço de Entrada**.
-- **Gestão de Risco Estrita**: Limite de 2 trades simultâneos de $21 (configurável).
-- **Trava de Slot (Semaphore)**: Impede que o bot abra mais ordens que o permitido em sinais simultâneos.
-- **Dashboard Financeiro**: Saldo em tempo real e PnL aberto com indicadores visuais de lucro/prejuízo.
-- **Pânico Blindado**: Botão de emergência v41.1 que limpa posições e zera o cache.
+## 🚀 Novidades da Versão 47.0
+- **Integração Total Telegram**: Notificações detalhadas de Compra, Venda e Zombie Killer com cálculos de PnL em tempo real.
+- **Centro de Comando Remoto**: Comandos `/start`, `/status` e `/relatorio` para monitoramento via smartphone.
+- **Zombie Killer v2 (2h)**: Sistema automático de desalocação de capital para trades laterais (zumbis).
+- **Precisão Cirúrgica**: Algoritmo de arredondamento 'Floor' para evitar erros de saldo insuficiente na Binance.
+- **Segurança de Slots**: Trava de semáforo que garante o limite estrito de 2 trades simultâneos.
 
-## 🛠️ Requisitos
-- Python 3.10+
-- Bibliotecas: `customtkinter`, `ccxt`, `pandas`, `mplfinance`, `matplotlib`
+## 🛠️ Como Iniciar
+1. **Ambiente**: Certifique-se de estar no ambiente Conda `r2`.
+2. **Execução**: Utilize o arquivo `START_BOT.bat` (executar como Administrador).
+3. **Telegram**: Configure seu `TOKEN` e `CHAT_ID` no arquivo de configuração.
 
-## ⚙️ Configuração Rápida
-1. Renomeie o arquivo `.env.example` para `.env` e insira suas chaves de API.
-2. No arquivo `core/config.py`, ajuste os pares desejados (Ex: `RENDER/USDT`, `SOL/USDT`).
-3. Execute o `main.py`.
+## 🤖 Comandos Telegram
+- `/status`: Resumo do lucro do dia e ocupação de slots.
+- `/relatorio`: Histórico detalhado dos últimos trades realizados.
 
-## ⚠️ Aviso Legal
-Este software é para fins educacionais. Negociar criptomoedas envolve alto risco. O desenvolvedor não se responsabiliza por perdas financeiras.
+---
+*Desenvolvido para alta performance e estabilidade.*

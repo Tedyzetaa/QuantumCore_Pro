@@ -4,14 +4,17 @@ from tkinter import ttk
 import matplotlib.pyplot as plt
 import mplfinance as mpf
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import queue, threading, asyncio, time
+import queue, threading, asyncio, time, os
+from core.telegram_bot import TelegramManager
 
 class MultiPairTradingInterface:
     def __init__(self, root, engine_class, config):
         self.root = root
         self.config = config
         self.update_queue = queue.Queue()
-        self.engine = engine_class(self.update_queue, self.config)
+        self.telegram = TelegramManager(config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_CHAT_ID)
+        self.engine = engine_class(self.update_queue, self.config, telegram=self.telegram)
+        self.telegram.engine = self.engine
         self.loop = asyncio.new_event_loop()
         self.selected_symbol = self.config.PAIRS[0]['symbol']
         self.cached_data = {}
@@ -23,6 +26,8 @@ class MultiPairTradingInterface:
         self.setup_ui()
         self.root.after(100, self.process_queue)
         threading.Thread(target=self._run_async_loop, daemon=True).start()
+        asyncio.run_coroutine_threadsafe(self.telegram.start(), self.loop)
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def _run_async_loop(self):
         asyncio.set_event_loop(self.loop)
@@ -154,4 +159,18 @@ class MultiPairTradingInterface:
     def start_bot(self): asyncio.run_coroutine_threadsafe(self.engine.start(), self.loop)
     def stop_bot(self): asyncio.run_coroutine_threadsafe(self.engine.stop(), self.loop)
     def panic_bot(self): asyncio.run_coroutine_threadsafe(self.engine.emergency_close_all(), self.loop)
+
+    def on_closing(self):
+        print("🛑 Encerrando sistema de forma segura...")
+        # 1. Para o Motor
+        self.engine.running = False
+        
+        # 2. Para o loop do asyncio
+        self.loop.call_soon_threadsafe(self.loop.stop())
+        
+        # 3. Fecha a janela
+        self.root.destroy()
+        # Força a saída do processo caso threads ainda existam
+        os._exit(0)
+
     def run(self): self.root.mainloop()

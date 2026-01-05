@@ -34,3 +34,4 @@ class Config:
     TRAILING_CALLBACK = 0.006   # Vende se recuar 0.6%
     
     BTC_CRASH_LIMIT = -3.0     # Deixamos o BTC "respirar" mais antes de travar o bot
+    ZOMBIE_TIMEOUT = 7200      # 2 horas em segundos
