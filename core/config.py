@@ -28,6 +28,7 @@ class Config:
     EMA_FILTER_ENABLED = False # Vamos desativar o filtro de EMA 200 temporariamente para testar
     
     # ESTRATÉGIA DE LUCRO (MODO SCALPER)
+    TAKE_PROFIT = 0.025        # Alvo de 2.5%
     BREAKEVEN_TRIGGER = 0.012  # Protege com 1.2%
     TRAILING_ACTIVATION = 0.018 # Ativa venda com 1.8%
     TRAILING_CALLBACK = 0.006   # Vende se recuar 0.6%

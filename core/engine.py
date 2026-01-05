@@ -12,7 +12,7 @@ class TradingEngine:
         self.config = config
         self.running = False
         self.active_trades = {}
-        self.cooldown_list = {}
+        self.cooldown_list = {} # Guarda o tempo da última venda de cada moeda
         
         self.exchange = ccxt.binance({
             'apiKey': config.API_KEY, 
@@ -64,14 +64,34 @@ class TradingEngine:
             price, rsi, lower_bb = row['close'], row['rsi'], row['lower_bb']
             
             status = "NEUTRO"
+            now = time.time()
+            
+            # --- LÓGICA DE VENDA (TAKE PROFIT 2.5%) ---
             if s in self.active_trades and self.active_trades[s].get('status') != 'Pendente':
                 trade = self.active_trades[s]
-                profit = (price - trade['entry']) / trade['entry']
-                status = "VENDENDO (T)" if profit >= self.config.TRAILING_ACTIVATION else "COMPRADO"
+                entry_price = trade['entry']
+                profit = (price - entry_price) / entry_price
+                status = "COMPRADO"
+
+                if profit >= self.config.TAKE_PROFIT:
+                    self.update_queue.put(('log', f"💰 TAKE PROFIT ATINGIDO: {s} ({profit*100:.2f}%)"))
+                    await self._sell(s, price)
+                    # ADICIONA O COOLDOWN DE 5 MINUTOS (300 segundos)
+                    self.cooldown_list[s] = now + 300 
+                    return None
             
-            # --- TRAVA DE SEGURANÇA REFORÇADA ---
+            # --- LÓGICA DE COMPRA COM TRAVA DE 5 MINUTOS ---
             if self.running and s not in self.active_trades:
-                # Verificação em tempo real (Double Check)
+                # Verifica se a moeda está no "castigo" de 5 minutos
+                if s in self.cooldown_list:
+                    if now < self.cooldown_list[s]:
+                        remaining = int(self.cooldown_list[s] - now)
+                        status = f"WAIT ({remaining}s)"
+                        return {'symbol': s, 'price': price, 'rsi': rsi, 'df': df, 'status': status, 'trade_info': None}
+                    else:
+                        del self.cooldown_list[s] # Tempo acabou, pode comprar de novo
+
+                # Verificação normal de compra
                 if len(self.active_trades) < self.config.MAX_OPEN_TRADES:
                     if rsi < self.config.RSI_OVERSOLD and price <= lower_bb * 1.005:
                         status = "COMPRA!"
@@ -84,6 +104,29 @@ class TradingEngine:
             
             return {'symbol': s, 'price': price, 'rsi': rsi, 'df': df, 'status': status, 'trade_info': self.active_trades.get(s)}
         except: return None
+
+    async def _sell(self, symbol, price):
+        if symbol not in self.active_trades: return
+        try:
+            trade = self.active_trades[symbol]
+            qty = trade['qty']
+            # Ajuste de precisão (Binance exige isso)
+            qty = self.exchange.amount_to_precision(symbol, qty)
+            
+            self.update_queue.put(('log', f"🔻 VENDENDO {symbol}..."))
+            order = await self.exchange.create_market_sell_order(symbol, qty)
+            
+            # PnL Real
+            avg_price = float(order.get('average', price))
+            pnl = (avg_price - trade['entry']) * float(qty)
+            
+            self.update_queue.put(('log', f"✅ VENDA SUCESSO: {symbol} @ {avg_price} (PnL: ${pnl:.2f})"))
+            
+            del self.active_trades[symbol]
+            self._save_state()
+            
+        except Exception as e:
+            self.update_queue.put(('log', f"❌ ERRO VENDA {symbol}: {e}"))
 
     async def _buy(self, symbol, price):
         if not self.running: return
