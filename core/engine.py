@@ -12,8 +12,6 @@ class TradingEngine:
         self.config = config
         self.running = False
         self.active_trades = {}
-        self.last_update_id = 0
-        self.btc_health = {'status': 'OK', 'change_1h': 0.0}
         self.cooldown_list = {}
         
         self.exchange = ccxt.binance({
@@ -24,7 +22,7 @@ class TradingEngine:
         })
         if config.SANDBOX_MODE: self.exchange.set_sandbox_mode(True)
         
-        self.portfolio = {'available_capital': 0.0, 'floating_pnl': 0.0, 'daily_pnl': 0.0, 'best_pair': "---"}
+        self.portfolio = {'available_capital': 0.0, 'floating_pnl': 0.0}
         self._load_state()
 
     def _load_state(self):
@@ -41,12 +39,10 @@ class TradingEngine:
     async def start(self):
         await self.exchange.load_markets()
         self.running = True
-        self.update_queue.put(('bot_state', True))
         self.update_queue.put(('log', "▶ MOTOR INICIADO - BUSCANDO ENTRADAS"))
 
     async def stop(self):
         self.running = False
-        self.update_queue.put(('bot_state', False))
         self.update_queue.put(('log', "⏸ MOTOR PAUSADO"))
 
     async def _process_pair(self, pair):
@@ -56,124 +52,130 @@ class TradingEngine:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df.set_index(pd.to_datetime(df['timestamp'], unit='ms'), inplace=True)
             
-            # Indicadores essenciais para o gráfico
+            # Indicadores de Elite
             df['ma20'] = df['close'].rolling(20).mean()
             df['std'] = df['close'].rolling(20).std()
             df['lower_bb'] = df['ma20'] - (df['std'] * 2)
             df['upper_bb'] = df['ma20'] + (df['std'] * 2)
-            
             delta = df['close'].diff()
             df['rsi'] = 100 - (100 / (1 + (delta.where(delta > 0, 0).rolling(14).mean() / (abs(delta.where(delta < 0, 0)).rolling(14).mean() + 1e-9))))
             
             row = df.iloc[-1]
-            price, rsi, lower_bb, upper_bb = row['close'], row['rsi'], row['lower_bb'], row['upper_bb']
+            price, rsi, lower_bb = row['close'], row['rsi'], row['lower_bb']
             
-            # --- DEFINIÇÃO DO STATUS REAL ---
             status = "NEUTRO"
-            
-            if s in self.active_trades:
+            if s in self.active_trades and self.active_trades[s].get('status') != 'Pendente':
                 trade = self.active_trades[s]
-                # Se o lucro subiu acima da ativação do Trailing
                 profit = (price - trade['entry']) / trade['entry']
-                if profit >= self.config.TRAILING_ACTIVATION:
-                    status = "VENDENDO (T)"
-                elif trade.get('breakeven_active'):
-                    status = "PROTEGIDO"
+                status = "VENDENDO (T)" if profit >= self.config.TRAILING_ACTIVATION else "COMPRADO"
+            
+            # --- TRAVA DE SEGURANÇA REFORÇADA ---
+            if self.running and s not in self.active_trades:
+                # Verificação em tempo real (Double Check)
+                if len(self.active_trades) < self.config.MAX_OPEN_TRADES:
+                    if rsi < self.config.RSI_OVERSOLD and price <= lower_bb * 1.005:
+                        status = "COMPRA!"
+                        # Bloqueio imediato para evitar que outra task entre aqui
+                        # Adicionamos o par temporariamente para ocupar o slot
+                        self.active_trades[s] = {'entry': price, 'status': 'Pendente'} 
+                        await self._buy(s, price)
                 else:
-                    status = "COMPRADO"
-            else:
-                if self.running:
-                    if rsi < self.config.RSI_OVERSOLD:
-                        if price <= lower_bb * 1.005: # Margem de 0.5% da banda
-                            if len(self.active_trades) < self.config.MAX_OPEN_TRADES:
-                                status = "COMPRA!"
-                                await self._buy(s, price)
-                            else:
-                                self.update_queue.put(('log', f"⚠️ Limite de trades atingido ({s} ignorada)"))
-                
-                if s in self.cooldown_list:
-                    status = "COOLDOWN"
-
-            return {
-                'symbol': s, 
-                'price': price, 
-                'rsi': rsi, 
-                'df': df, 
-                'status': status # Enviando o status para a interface
-            }
+                    status = "NEUTRO (Saturado)"
+            
+            return {'symbol': s, 'price': price, 'rsi': rsi, 'df': df, 'status': status, 'trade_info': self.active_trades.get(s)}
         except: return None
 
     async def _buy(self, symbol, price):
         if not self.running: return
 
         try:
-            # 1. VERIFICAÇÃO DE STATUS DO MERCADO
-            market = self.exchange.market(symbol)
-            if not market['active']:
-                self.update_queue.put(('log', f"⚠️ {symbol} está em manutenção na Binance."))
+            # FORÇAR RECARREGAMENTO DE MERCADOS (Resolve o erro de Market Closed)
+            await self.exchange.load_markets(True) 
+            
+            if symbol not in self.exchange.markets:
+                self.update_queue.put(('log', f"⚠️ {symbol} não encontrado na Binance."))
                 return
 
-            # 2. CALCULO DE QUANTIDADE COM PRECISÃO
-            amount = self.exchange.amount_to_precision(symbol, self.config.TRADE_AMOUNT / price)
+            market = self.exchange.market(symbol)
             
-            # 3. ENVIO DA ORDEM COM SINCRONIZAÇÃO DE HORÁRIO
-            self.update_queue.put(('log', f"🛒 Tentando comprar {symbol}..."))
+            # Verificar se o par está ativo e permite ordens a mercado
+            if not market.get('active', False):
+                self.update_queue.put(('log', f"⚠️ Mercado {symbol} está suspenso/fechado."))
+                return
+
+            # Cálculo de quantidade com precisão rigorosa
+            amount_usdt = self.config.TRADE_AMOUNT
+            amount = self.exchange.amount_to_precision(symbol, amount_usdt / price)
+            
+            self.update_queue.put(('log', f"🛒 Enviando ordem real para {symbol}..."))
+            
+            # Envio com sincronização de tempo (recvWindow)
             order = await self.exchange.create_market_buy_order(symbol, amount, {'recvWindow': 60000})
             
             real_price = float(order.get('average', price))
             self.active_trades[symbol] = {
-                'entry': real_price,
-                'qty': float(amount),
-                'highest': real_price,
+                'entry': real_price, 
+                'qty': float(amount), 
                 'sl': real_price * 0.96,
-                'entry_time': time.time()
+                'time': time.time()
             }
             self._save_state()
-            self.update_queue.put(('log', f"🚀 COMPRA REALIZADA: {symbol} @ {real_price}"))
+            self.update_queue.put(('log', f"🚀 COMPRA SUCESSO: {symbol} @ {real_price}"))
             
         except Exception as e:
-            self.update_queue.put(('log', f"❌ ERRO COMPRA: {e}"))
-
-    async def handle_commands(self):
-        pass
+            # Se der erro de mercado fechado aqui, o bot pausa o par por 1 minuto
+            self.update_queue.put(('log', f"❌ ERRO API: {e}"))
+            if "closed" in str(e).lower():
+                self.update_queue.put(('log', "💡 Dica: Verifique se BINANCE_SANDBOX_MODE está FALSE no .env"))
 
     async def trading_cycle(self):
         try:
-            await self.handle_commands()
-            tasks = [self._process_pair(p) for p in self.config.PAIRS]
+            # 1. Verificação de segurança ANTES de começar o ciclo
+            if len(self.active_trades) >= self.config.MAX_OPEN_TRADES:
+                # Se já atingiu o limite, apenas atualiza preços e PnL, não busca novas compras
+                self.update_queue.put(('log', f"✅ Limite de slots atingido ({self.config.MAX_OPEN_TRADES}/{self.config.MAX_OPEN_TRADES}). Monitorando saídas..."))
+                # Reduzimos a carga processando apenas o que já está comprado
+                tasks = [self._process_pair(p) for p in self.config.PAIRS if p['symbol'] in self.active_trades]
+            else:
+                tasks = [self._process_pair(p) for p in self.config.PAIRS]
+
             results = await asyncio.gather(*tasks)
             valid = [r for r in results if r]
-            
             if valid:
-                # --- CÁLCULO DE PNL E SALDO ---
                 bal = await self.exchange.fetch_balance()
                 self.portfolio['available_capital'] = float(bal.get('USDT', {}).get('free', 0))
                 
-                floating_pnl = 0.0
-                for s, t in self.active_trades.items():
-                    for r in valid:
-                        if r['symbol'] == s:
-                            pnl = (r['price'] - t['entry']) * t['qty']
-                            floating_pnl += pnl
-                
-                self.portfolio['floating_pnl'] = floating_pnl
+                f_pnl = 0.0
+                for r in valid:
+                    if r['symbol'] in self.active_trades and 'qty' in self.active_trades[r['symbol']]:
+                        f_pnl += (r['price'] - self.active_trades[r['symbol']]['entry']) * self.active_trades[r['symbol']]['qty']
+
+                self.portfolio['floating_pnl'] = f_pnl
                 self.update_queue.put(('portfolio', self.portfolio))
                 self.update_queue.put(('pairs_data', valid))
+                
+                conn = sqlite3.connect('trades_history.db')
+                hist = conn.execute("SELECT symbol, pnl FROM trades WHERE side='SELL' ORDER BY id DESC LIMIT 10").fetchall()
+                conn.close()
+                self.update_queue.put(('trade_history', hist))
         except Exception as e:
             self.update_queue.put(('log', f"Erro Ciclo: {e}"))
 
     async def emergency_close_all(self):
         self.running = False
-        self.update_queue.put(('log', "🚨 EXECUTANDO PÂNICO DEFINITIVO..."))
+        self.update_queue.put(('log', "🚨 PÂNICO FORCE v41.1..."))
         try:
+            await self.exchange.load_markets()
             bal = await self.exchange.fetch_balance()
             for s in list(self.active_trades.keys()):
                 coin = s.split('/')[0]
                 qty = float(bal.get(coin, {}).get('free', 0))
                 if qty > 0:
-                    await self.exchange.create_market_sell_order(s, self.exchange.amount_to_precision(s, qty))
-            self.active_trades = {}
-            if os.path.exists('active_trades.json'): os.remove('active_trades.json')
-            self.update_queue.put(('log', "✅ TODAS AS POSIÇÕES ZERADAS."))
-        except Exception as e:
-            self.update_queue.put(('log', f"❌ ERRO NO PÂNICO: {e}"))
+                    ticker = await self.exchange.fetch_ticker(s)
+                    if (qty * ticker['last']) > 11.0:
+                        precise_qty = self.exchange.amount_to_precision(s, qty)
+                        await self.exchange.create_market_sell_order(s, precise_qty)
+                        self.update_queue.put(('log', f"✅ {s} zerado."))
+            self.active_trades = {}; self._save_state()
+            self.update_queue.put(('log', "🏁 PÂNICO CONCLUÍDO."))
+        except Exception as e: self.update_queue.put(('log', f"❌ ERRO PÂNICO: {e}"))

@@ -13,9 +13,8 @@ class MultiPairTradingInterface:
         self.update_queue = queue.Queue()
         self.engine = engine_class(self.update_queue, self.config)
         self.loop = asyncio.new_event_loop()
-        
         self.selected_symbol = self.config.PAIRS[0]['symbol']
-        self.cached_dfs = {}
+        self.cached_data = {}
         
         self.fig, self.ax = plt.subplots(figsize=(8, 5), dpi=100)
         self.fig.patch.set_facecolor('#0e0e0e')
@@ -34,157 +33,125 @@ class MultiPairTradingInterface:
             except: pass
 
     def setup_ui(self):
-        self.root.title("QuantumCore v37.0 - Flexible Terminal")
-        self.root.geometry("1450x900")
+        self.root.title("QuantumCore v44.0 - Elite Terminal")
+        self.root.geometry("1500x950")
         
-        # --- PANED WINDOW PRINCIPAL (Horizontal) ---
-        self.main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg="#0a0a0a", sashwidth=4, sashrelief=tk.RAISED)
+        # PANED WINDOW PRINCIPAL (Horizontal)
+        self.main_pane = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg="#0a0a0a", sashwidth=6, sashrelief=tk.RAISED)
         self.main_pane.pack(fill="both", expand=True)
 
-        # SIDEBAR (Lado Esquerdo)
+        # SIDEBAR ESQUERDA
         self.sidebar = ctk.CTkFrame(self.main_pane, corner_radius=0, fg_color="#121212")
-        self.main_pane.add(self.sidebar, width=350)
+        self.main_pane.add(self.sidebar, width=380)
 
-        # --- INFORMAÇÕES DA CONTA (PNL / SALDO) ---
-        self.fin_frame = ctk.CTkFrame(self.sidebar, fg_color="#1e1e1e", corner_radius=10)
-        self.fin_frame.pack(pady=10, padx=10, fill="x")
-
-        self.lbl_cap = ctk.CTkLabel(self.fin_frame, text="Saldo: $0.00", font=("Arial", 18, "bold"), text_color="#00ffcc")
-        self.lbl_cap.pack(pady=5)
-
-        self.lbl_pnl = ctk.CTkLabel(self.fin_frame, text="PnL Aberto: $0.00", font=("Arial", 14), text_color="gray")
+        # Dashboard Financeiro
+        self.fin_frame = ctk.CTkFrame(self.sidebar, fg_color="#1e1e1e", corner_radius=12)
+        self.fin_frame.pack(pady=15, padx=15, fill="x")
+        self.lbl_cap = ctk.CTkLabel(self.fin_frame, text="Saldo: $0.00", font=("Orbitron", 18, "bold"), text_color="#00ffcc")
+        self.lbl_cap.pack(pady=8)
+        self.lbl_pnl = ctk.CTkLabel(self.fin_frame, text="PnL Aberto: $0.00", font=("Arial", 15, "bold"))
         self.lbl_pnl.pack(pady=5)
 
-        ctk.CTkLabel(self.sidebar, text="TRADING CORE", font=("Impact", 24), text_color="#00ffcc").pack(pady=(10, 15))
+        # Controles
+        btn_f = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        btn_f.pack(fill="x", padx=15)
+        ctk.CTkButton(btn_f, text="▶ START", fg_color="#27ae60", width=110, command=self.start_bot).pack(side="left", padx=5, expand=True)
+        ctk.CTkButton(btn_f, text="⏸ STOP", fg_color="#e67e22", width=110, command=self.stop_bot).pack(side="left", padx=5, expand=True)
+        ctk.CTkButton(self.sidebar, text="🚨 PÂNICO GERAL", fg_color="#c0392b", font=("Arial", 13, "bold"), command=self.panic_bot).pack(pady=15, padx=20, fill="x")
 
-        # Botões Principais
-        self.btn_start = ctk.CTkButton(self.sidebar, text="▶ START", fg_color="#2ecc71", command=self.start_bot)
-        self.btn_start.pack(pady=5, padx=20, fill="x")
-        self.btn_stop = ctk.CTkButton(self.sidebar, text="⏸ STOP", fg_color="#e67e22", command=self.stop_bot)
-        self.btn_stop.pack(pady=5, padx=20, fill="x")
-        self.btn_panic = ctk.CTkButton(self.sidebar, text="🚨 PÂNICO", fg_color="#c0392b", command=self.panic_bot)
-        self.btn_panic.pack(pady=15, padx=20, fill="x")
-
-        # Tabela Mercado
-        ctk.CTkLabel(self.sidebar, text="MERCADO ATIVO", font=("Arial", 11, "bold"), text_color="gray").pack(pady=(10,0))
-        self.tree_pairs = ttk.Treeview(self.sidebar, columns=("P", "Pr", "R", "S"), show="headings", height=15)
-        self.tree_pairs.heading("P", text="PAR")
-        self.tree_pairs.heading("Pr", text="PREÇO")
-        self.tree_pairs.heading("R", text="RSI")
-        self.tree_pairs.heading("S", text="STATUS")
+        # Tabela de Mercado
+        ctk.CTkLabel(self.sidebar, text="MERCADO ATIVO", font=("Arial", 11, "bold"), text_color="gray").pack()
+        self.tree = ttk.Treeview(self.sidebar, columns=("P", "Pr", "R", "S"), show="headings", height=12)
+        for c, h in zip(("P","Pr","R","S"), ("PAR","PREÇO","RSI","STATUS")):
+            self.tree.heading(c, text=h)
+            self.tree.column(c, width=75, anchor="center")
+        self.tree.pack(pady=5, padx=10, fill="x")
+        self.tree.bind("<<TreeviewSelect>>", self.on_select)
         
-        self.tree_pairs.column("P", width=80)
-        self.tree_pairs.column("Pr", width=80)
-        self.tree_pairs.column("R", width=40)
-        self.tree_pairs.column("S", width=100)
-        self.tree_pairs.pack(pady=5, padx=10, fill="x")
+        # Tags de Cores
+        self.tree.tag_configure('buy_signal', background='#27ae60', foreground='white')
+        self.tree.tag_configure('bought', background='#2980b9', foreground='white')
+        self.tree.tag_configure('selling', background='#d35400', foreground='white')
 
-        # --- DEFINIÇÃO DE CORES DOS STATUS ---
-        self.tree_pairs.tag_configure('neutral', foreground='gray')
-        self.tree_pairs.tag_configure('buy_signal', background='#27ae60', foreground='white') # Verde
-        self.tree_pairs.tag_configure('bought', background='#2980b9', foreground='white')   # Azul
-        self.tree_pairs.tag_configure('selling', background='#e67e22', foreground='white')  # Laranja/Alerta
-        
-        self.tree_pairs.bind("<<TreeviewSelect>>", self.on_select)
-
-        # Histórico
-        ctk.CTkLabel(self.sidebar, text="VENDAS RECENTES", font=("Arial", 11, "bold"), text_color="gray").pack(pady=(15,0))
-        self.tree_hist = ttk.Treeview(self.sidebar, columns=("H_P", "H_PnL"), show="headings", height=6)
-        self.tree_hist.heading("H_P", text="PAR"); self.tree_hist.heading("H_PnL", text="PNL")
-        self.tree_hist.column("H_P", width=110); self.tree_hist.column("H_PnL", width=110)
+        # Histórico de Trades
+        ctk.CTkLabel(self.sidebar, text="HISTÓRICO DE VENDAS", font=("Arial", 11, "bold"), text_color="gray").pack(pady=(15,0))
+        self.tree_hist = ttk.Treeview(self.sidebar, columns=("H_P", "H_PnL"), show="headings", height=8)
+        self.tree_hist.heading("H_P", text="PAR"); self.tree_hist.heading("H_PnL", text="LUCRO $")
+        self.tree_hist.column("H_P", width=120); self.tree_hist.column("H_PnL", width=120)
         self.tree_hist.pack(pady=5, padx=10, fill="both", expand=True)
 
-        # --- ÁREA DIREITA (Gráfico e Log) ---
-        self.right_pane = tk.PanedWindow(self.main_pane, orient=tk.VERTICAL, bg="#0a0a0a", sashwidth=4, sashrelief=tk.RAISED)
+        # --- ÁREA DIREITA (Vertical Pane) ---
+        self.right_pane = tk.PanedWindow(self.main_pane, orient=tk.VERTICAL, bg="#0a0a0a", sashwidth=6)
         self.main_pane.add(self.right_pane)
 
-        # Área do Gráfico
-        self.chart_container = ctk.CTkFrame(self.right_pane, fg_color="#0e0e0e")
-        self.right_pane.add(self.chart_container, height=600)
-
-        # Seletores de Tempo
-        self.time_frame = ctk.CTkFrame(self.chart_container, fg_color="transparent")
-        self.time_frame.pack(fill="x", padx=20, pady=(10,0))
-        for t in ["1m", "5m", "15m", "1h"]:
-            ctk.CTkButton(self.time_frame, text=t, width=50, fg_color="#1e1e1e", command=lambda x=t: self.log(f"Timeframe {x} selecionado (Visual)")).pack(side="left", padx=5)
-
-        self.chart_area = ctk.CTkFrame(self.chart_container, fg_color="#0e0e0e", corner_radius=15)
-        self.chart_area.pack(fill="both", expand=True, padx=20, pady=20)
+        # Topo: Gráfico
+        self.chart_container = ctk.CTkFrame(self.right_pane, fg_color="#0e0e0e", corner_radius=0)
+        self.right_pane.add(self.chart_container, height=650)
         
-        self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_area)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=10, pady=10)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.chart_container)
+        self.canvas.get_tk_widget().pack(fill="both", expand=True, padx=15, pady=15)
 
-        # Área de Log
-        self.log_container = ctk.CTkFrame(self.right_pane, fg_color="#0e0e0e")
-        self.right_pane.add(self.log_container, height=200)
-
-        self.log_box = ctk.CTkTextbox(self.log_container, fg_color="#0e0e0e", text_color="#00ff88", font=("Consolas", 11))
-        self.log_box.pack(fill="both", expand=True, padx=20, pady=20)
+        # Base: Logs
+        self.log_container = ctk.CTkFrame(self.right_pane, fg_color="#0a0a0a", corner_radius=0)
+        self.right_pane.add(self.log_container, height=250)
+        self.log_box = ctk.CTkTextbox(self.log_container, fg_color="#0e0e0e", text_color="#00ff88", font=("Consolas", 12))
+        self.log_box.pack(fill="both", expand=True, padx=10, pady=10)
 
     def on_select(self, event):
-        sel = self.tree_pairs.selection()
+        sel = self.tree.selection()
         if sel:
-            symbol = self.tree_pairs.item(sel[0], "values")[0]
-            self.selected_symbol = symbol
-            if symbol in self.cached_dfs: self.render_chart({'symbol': symbol, 'df': self.cached_dfs[symbol]})
-
-    def sort_col(self, col):
-        l = [(self.tree_pairs.set(k, col), k) for k in self.tree_pairs.get_children('')]
-        l.sort(reverse=True)
-        for index, (val, k) in enumerate(l): self.tree_pairs.move(k, '', index)
+            self.selected_symbol = self.tree.item(sel[0], "values")[0]
+            if self.selected_symbol in self.cached_data: self.render_chart(self.cached_data[self.selected_symbol])
 
     def process_queue(self):
         try:
             while not self.update_queue.empty():
                 mtype, data = self.update_queue.get_nowait()
                 if mtype == 'pairs_data':
-                    # Atualiza tabela e cache
                     for r in data:
-                        self.cached_dfs[r['symbol']] = r['df']
-                        
-                        symbol = r['symbol']
-                        status = r['status']
-                        
-                        vals = (symbol, f"${r['price']:.2f}", f"{r['rsi']:.0f}", status)
-                        
-                        # Define a tag baseada no texto do status
-                        tag = 'neutral'
-                        if "COMPRA" in status: tag = 'buy_signal'
-                        elif "COMPRADO" in status or "PROTEGIDO" in status: tag = 'bought'
-                        elif "VENDENDO" in status: tag = 'selling'
-                        
-                        # Atualiza ou insere na tree
+                        self.cached_data[r['symbol']] = r
+                        tag = 'buy_signal' if "COMPRA" in r['status'] else ('bought' if "COMPRADO" in r['status'] else ('selling' if "VENDENDO" in r['status'] else ''))
                         found = False
-                        for item in self.tree_pairs.get_children():
-                            if self.tree_pairs.item(item, 'values')[0] == symbol:
-                                self.tree_pairs.item(item, values=vals, tags=(tag,))
+                        for item in self.tree.get_children():
+                            if self.tree.item(item, 'values')[0] == r['symbol']:
+                                self.tree.item(item, values=(r['symbol'], f"${r['price']:.2f}", f"{r['rsi']:.0f}", r['status']), tags=(tag,))
                                 found = True; break
-                        if not found: self.tree_pairs.insert("", "end", values=vals, tags=(tag,))
-                        
+                        if not found: self.tree.insert("", "end", values=(r['symbol'], f"${r['price']:.2f}", f"{r['rsi']:.0f}", r['status']), tags=(tag,))
                         if r['symbol'] == self.selected_symbol: self.render_chart(r)
+                elif mtype == 'portfolio':
+                    self.lbl_cap.configure(text=f"Saldo: ${data['available_capital']:.2f}")
+                    pnl = data['floating_pnl']
+                    self.lbl_pnl.configure(text=f"PnL Aberto: ${pnl:.2f}", text_color="#2ecc71" if pnl>=0 else "#e74c3c")
                 elif mtype == 'trade_history':
                     for i in self.tree_hist.get_children(): self.tree_hist.delete(i)
                     for r in data: self.tree_hist.insert("", "end", values=(r[0], f"${r[1]:.2f}"))
                 elif mtype == 'log':
-                    self.log_box.insert("end", f"> {data}\n"); self.log_box.see("end")
-                elif mtype == 'portfolio':
-                    self.lbl_cap.configure(text=f"Saldo: ${data['available_capital']:.2f}")
-                    pnl_color = "#2ecc71" if data['floating_pnl'] >= 0 else "#e74c3c"
-                    self.lbl_pnl.configure(text=f"PnL Aberto: ${data['floating_pnl']:.2f}", text_color=pnl_color)
+                    self.log_box.insert("end", f"[{time.strftime('%H:%M:%S')}] > {data}\n"); self.log_box.see("end")
         except: pass
         self.root.after(100, self.process_queue)
 
     def render_chart(self, data):
         self.ax.clear()
-        df = data['df'].tail(50)
+        df = data['df'].tail(60)
         mc = mpf.make_marketcolors(up='#00ff88', down='#ff3333', inherit=True)
         s = mpf.make_mpf_style(base_mpl_style='dark_background', marketcolors=mc, facecolor='#0e0e0e')
-        mpf.plot(df, type='candle', ax=self.ax, style=s)
-        self.ax.set_title(f"LIVE: {data['symbol']}", color="#00ffcc", loc='left')
+        add_plots = [
+            mpf.make_addplot(df['upper_bb'], color='#3498db', width=0.7, ax=self.ax),
+            mpf.make_addplot(df['lower_bb'], color='#3498db', width=0.7, ax=self.ax),
+            mpf.make_addplot(df['ma20'], color='#f1c40f', width=0.8, ax=self.ax)
+        ]
+        if data.get('trade_info'):
+            entry = data['trade_info']['entry']
+            add_plots.append(mpf.make_addplot([entry]*len(df), color='#2ecc71', width=1.5, linestyle='--', ax=self.ax))
+            self.ax.text(df.index[5], entry, f" COMPRA: ${entry:.2f}", color='#2ecc71', fontweight='bold', bbox=dict(facecolor='black', alpha=0.6))
+        
+        curr_rsi = df['rsi'].iloc[-1]
+        self.ax.text(0.02, 0.95, f"RSI: {curr_rsi:.1f}", transform=self.ax.transAxes, color='white', weight='bold', bbox=dict(facecolor='black', alpha=0.7))
+        mpf.plot(df, type='candle', ax=self.ax, style=s, addplot=add_plots)
+        self.ax.set_title(f"MONITORANDO: {data['symbol']}", color="#00ffcc", loc='left')
         self.canvas.draw_idle()
 
     def start_bot(self): asyncio.run_coroutine_threadsafe(self.engine.start(), self.loop)
     def stop_bot(self): asyncio.run_coroutine_threadsafe(self.engine.stop(), self.loop)
     def panic_bot(self): asyncio.run_coroutine_threadsafe(self.engine.emergency_close_all(), self.loop)
-    def log(self, m): self.update_queue.put(('log', m))
     def run(self): self.root.mainloop()

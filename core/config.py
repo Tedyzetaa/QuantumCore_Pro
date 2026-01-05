@@ -14,17 +14,17 @@ class Config:
     PAIRS = [
         {'symbol': 'SOL/USDT'}, {'symbol': 'ETH/USDT'}, {'symbol': 'BNB/USDT'},
         {'symbol': 'AVAX/USDT'}, {'symbol': 'NEAR/USDT'}, {'symbol': 'DOT/USDT'},
-        {'symbol': 'LINK/USDT'}, {'symbol': 'MATIC/USDT'}, {'symbol': 'ADA/USDT'},
+        {'symbol': 'LINK/USDT'}, {'symbol': 'POL/USDT'}, {'symbol': 'ADA/USDT'},
         {'symbol': 'LTC/USDT'}, {'symbol': 'XRP/USDT'}, {'symbol': 'ATOM/USDT'},
         {'symbol': 'GALA/USDT'}, {'symbol': 'INJ/USDT'}, {'symbol': 'OP/USDT'},
-        {'symbol': 'ARB/USDT'}, {'symbol': 'FET/USDT'}, {'symbol': 'RNDR/USDT'}
+        {'symbol': 'ARB/USDT'}, {'symbol': 'FET/USDT'}, {'symbol': 'RENDER/USDT'}
     ]
     
     # SEGURANÇA ALTCOIN
     MIN_24H_VOLUME = 10000000 # Mínimo 10 Milhões de dólares de volume
-    RSI_OVERSOLD = 35          # Aumentamos de 30 para 35 para dar mais chances de entrada
-    MAX_OPEN_TRADES = 3
-    TRADE_AMOUNT = 20.00       # Aumentamos para garantir que passe do mínimo da Binance ($10-15)
+    RSI_OVERSOLD = 33          # Aumentamos de 30 para 35 para dar mais chances de entrada
+    MAX_OPEN_TRADES = 2
+    TRADE_AMOUNT = 21.0
     EMA_FILTER_ENABLED = False # Vamos desativar o filtro de EMA 200 temporariamente para testar
     
     # ESTRATÉGIA DE LUCRO (MODO SCALPER)
