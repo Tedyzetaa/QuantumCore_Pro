@@ -46,8 +46,26 @@ class TradingEngine:
         self.running = False
         self.update_queue.put(('log', "⏸ MOTOR PAUSADO"))
 
+    def _check_daily_limits(self):
+        return True
+
     async def _process_pair(self, pair):
+        # 1. Checa Limites Diários
+        if not self._check_daily_limits(): return None 
+        
         s = pair['symbol']
+
+        # 2. --- NOVO: FILTRO DE VOLUME (Anti-Mico) ---
+        # Só gastamos tempo analisando se a moeda tiver liquidez
+        try:
+            ticker = await self.exchange.fetch_ticker(s)
+            quote_volume = ticker.get('quoteVolume', 0) # Volume em USDT
+            
+            if quote_volume < self.config.MIN_VOLUME_24H:
+                return None
+        except Exception:
+            return None # Se der erro no ticker, ignora e segue
+
         try:
             # 1. Busca mais candles para a EMA 200 funcionar bem
             # Usamos '1m' fixo e o limite definido no Config

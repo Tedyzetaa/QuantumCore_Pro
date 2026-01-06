@@ -44,3 +44,6 @@ class Config:
     
     BTC_CRASH_LIMIT = -3.0     # Deixamos o BTC "respirar" mais antes de travar o bot
     ZOMBIE_TIMEOUT = 3600      # 1 horas em segundos
+
+    # --- FILTROS DE QUALIDADE ---
+    MIN_VOLUME_24H = 1000000.0  # (1 Milhão USD) Só opera moedas com alta liquidez
