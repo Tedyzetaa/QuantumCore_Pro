@@ -23,15 +23,24 @@ class Config:
     # SEGURANÇA ALTCOIN
     MIN_24H_VOLUME = 10000000 # Mínimo 10 Milhões de dólares de volume
     RSI_OVERSOLD = 33          # Aumentamos de 30 para 35 para dar mais chances de entrada
-    MAX_OPEN_TRADES = 2
-    TRADE_AMOUNT = 21.0
-    EMA_FILTER_ENABLED = False # Vamos desativar o filtro de EMA 200 temporariamente para testar
     
-    # ESTRATÉGIA DE LUCRO (MODO SCALPER)
-    TAKE_PROFIT = 0.025        # Alvo de 2.5%
-    BREAKEVEN_TRIGGER = 0.012  # Protege com 1.2%
-    TRAILING_ACTIVATION = 0.018 # Ativa venda com 1.8%
-    TRAILING_CALLBACK = 0.006   # Vende se recuar 0.6%
+    # --- GERENCIAMENTO DE RISCO ---
+    TRADE_AMOUNT = 25.0      # Aumentado para $25 por slot
+    MAX_OPEN_TRADES = 2      # Continua 2 slots (Total investido: $50)
+    
+    # --- SAÍDA E LUCRO ---
+    TAKE_PROFIT = 0.021      # 2.1% (Alvo base)
+    STOP_LOSS = 0.04         # 4% (Mantivemos o stop de segurança)
+
+    # --- TRAILING STOP (O Deixa Correr) ---
+    USE_TRAILING_STOP = True
+    TRAILING_ACTIVATION = 0.021   # Ativa o rastreio quando bater 2.1% de lucro
+    TRAILING_CALLBACK = 0.003     # Vende se cair 0.3% do topo atingido
+    
+    # --- FILTROS DE TENDÊNCIA ---
+    USE_EMA_FILTER = True         # Se True, só compra acima da EMA
+    EMA_PERIOD = 200              # Tendência de longo prazo
+    LIMIT_CANDLES = 300           # Aumentamos para garantir cálculo preciso da EMA 200
     
     BTC_CRASH_LIMIT = -3.0     # Deixamos o BTC "respirar" mais antes de travar o bot
-    ZOMBIE_TIMEOUT = 7200      # 2 horas em segundos
+    ZOMBIE_TIMEOUT = 3600      # 1 horas em segundos

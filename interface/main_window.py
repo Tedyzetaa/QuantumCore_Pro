@@ -115,13 +115,21 @@ class MultiPairTradingInterface:
                 if mtype == 'pairs_data':
                     for r in data:
                         self.cached_data[r['symbol']] = r
-                        tag = 'buy_signal' if "COMPRA" in r['status'] else ('bought' if "COMPRADO" in r['status'] else ('selling' if "VENDENDO" in r['status'] else ''))
+                        
+                        # --- LÓGICA DE STATUS VISUAL (TRAILING) ---
+                        display_status = r['status']
+                        if r.get('trade_info'):
+                            highest = r['trade_info'].get('highest_price', 0)
+                            if highest > 0:
+                                display_status = "🚀 TRAILING"
+                        
+                        tag = 'buy_signal' if "COMPRA" in r['status'] else ('bought' if "COMPRADO" in r['status'] or "TRAILING" in display_status else ('selling' if "VENDENDO" in r['status'] else ''))
                         found = False
                         for item in self.tree.get_children():
                             if self.tree.item(item, 'values')[0] == r['symbol']:
-                                self.tree.item(item, values=(r['symbol'], f"${r['price']:.2f}", f"{r['rsi']:.0f}", r['status']), tags=(tag,))
+                                self.tree.item(item, values=(r['symbol'], f"${r['price']:.2f}", f"{r['rsi']:.0f}", display_status), tags=(tag,))
                                 found = True; break
-                        if not found: self.tree.insert("", "end", values=(r['symbol'], f"${r['price']:.2f}", f"{r['rsi']:.0f}", r['status']), tags=(tag,))
+                        if not found: self.tree.insert("", "end", values=(r['symbol'], f"${r['price']:.2f}", f"{r['rsi']:.0f}", display_status), tags=(tag,))
                         if r['symbol'] == self.selected_symbol: self.render_chart(r)
                 elif mtype == 'portfolio':
                     self.lbl_cap.configure(text=f"Saldo: ${data['available_capital']:.2f}")
@@ -145,6 +153,11 @@ class MultiPairTradingInterface:
             mpf.make_addplot(df['lower_bb'], color='#3498db', width=0.7, ax=self.ax),
             mpf.make_addplot(df['ma20'], color='#f1c40f', width=0.8, ax=self.ax)
         ]
+        
+        # --- VISUALIZAÇÃO DA EMA 200 ---
+        if 'ema200' in df.columns and not df['ema200'].isnull().all():
+            add_plots.append(mpf.make_addplot(df['ema200'], color='orange', width=1.5, ax=self.ax))
+            
         if data.get('trade_info'):
             entry = data['trade_info']['entry']
             add_plots.append(mpf.make_addplot([entry]*len(df), color='#2ecc71', width=1.5, linestyle='--', ax=self.ax))
