@@ -96,13 +96,19 @@ class TelegramManager:
             # 2. Configura o Estilo (Preto e Neon - Estilo Hacker)
             s = mpf.make_mpf_style(base_mpf_style='nightclouds', rc={'font.size': 8})
 
-            # 3. Adiciona Indicadores (EMA 200 e Bollinger)
+            # 3. Adiciona Indicadores (Rainbow SMAs)
             apds = [
                 mpf.make_addplot(df_chart['lower_bb'], color='green', width=0.8),
-                mpf.make_addplot(df_chart['upper_bb'], color='green', width=0.8),
+                # Curtas (Cores Quentes)
+                mpf.make_addplot(df_chart['sma_3'], color='yellow', width=0.5),
+                mpf.make_addplot(df_chart['sma_10'], color='orange', width=0.8),
+                mpf.make_addplot(df_chart['sma_20'], color='red', width=1.0),
+                # Longas (Cores Frias/Sólidas)
+                mpf.make_addplot(df_chart['sma_50'], color='cyan', width=1.0),
+                mpf.make_addplot(df_chart['sma_100'], color='blue', width=1.2),
+                mpf.make_addplot(df_chart['sma_200'], color='purple', width=1.5),
+                mpf.make_addplot(df_chart['sma_500'], color='black', width=2.0), # A Muralha
             ]
-            if 'ema200' in df_chart.columns:
-                apds.append(mpf.make_addplot(df_chart['ema200'], color='orange', width=1.5))
 
             # 4. Salva o gráfico na memória (Buffer)
             buf = io.BytesIO()
@@ -123,7 +129,7 @@ class TelegramManager:
 
             # 5. Envia a foto
             bot = Bot(token=self.token)
-            caption = f"📊 **ANÁLISE GRÁFICA: {symbol}**\n\n🤖 Ação: {side}\n💵 Preço: {price}\n📉 EMA 200: {'Ativa' if 'ema200' in df_chart.columns else 'N/A'}"
+            caption = f"📊 **ANÁLISE GRÁFICA: {symbol}**\n\n🤖 Ação: {side}\n💵 Preço: {price}\n🌈 Setup: Rainbow SMAs"
             await bot.send_photo(chat_id=self.chat_id, photo=buf, caption=caption, parse_mode='Markdown')
             
             buf.close()

@@ -67,28 +67,35 @@ class TradingEngine:
             return None # Se der erro no ticker, ignora e segue
 
         try:
-            # 1. Busca mais candles para a EMA 200 funcionar bem
-            # Usamos '1m' fixo e o limite definido no Config
-            ohlcv = await self.exchange.fetch_ohlcv(s, '1m', limit=self.config.LIMIT_CANDLES)
-            if not ohlcv: return None
+            # Baixa 600 candles para garantir o cálculo da SMA 500
+            timeframe = getattr(self.config, 'TIMEFRAME', '1m')
+            ohlcv = await self.exchange.fetch_ohlcv(s, timeframe, limit=self.config.LIMIT_CANDLES)
+            if not ohlcv or len(ohlcv) < 500: return None # Proteção se a moeda for muito nova e não tiver 500 candles
             
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df.set_index(pd.to_datetime(df['timestamp'], unit='ms'), inplace=True)
             
-            # 2. Cálculos Técnicos (RSI, Bandas e a NOVA EMA)
-            df['ma20'] = df['close'].rolling(20).mean()
-            df['std'] = df['close'].rolling(20).std()
-            df['lower_bb'] = df['ma20'] - (df['std'] * 2)
-            df['upper_bb'] = df['ma20'] + (df['std'] * 2)
-            
+            # --- CÁLCULO DAS 7 MÉDIAS MÓVEIS ---
+            for period in self.config.SMA_PERIODS:
+                df[f'sma_{period}'] = df['close'].rolling(window=period).mean()
+
+            # Outros indicadores (Calculados via Pandas para performance)
             delta = df['close'].diff()
-            df['rsi'] = 100 - (100 / (1 + (delta.where(delta > 0, 0).rolling(14).mean() / (abs(delta.where(delta < 0, 0)).rolling(14).mean() + 1e-9))))
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            df['rsi'] = 100 - (100 / (1 + rs))
             
-            # --- NOVO: CÁLCULO DA EMA 200 ---
-            df['ema200'] = df['close'].ewm(span=self.config.EMA_PERIOD, adjust=False).mean()
+            # Bollinger Bands (20, 2)
+            df['std'] = df['close'].rolling(20).std()
+            df['lower_bb'] = df['sma_20'] - (df['std'] * 2)
+            df['upper_bb'] = df['sma_20'] + (df['std'] * 2)
             
-            row = df.iloc[-1]
-            price, rsi, lower_bb, ema_val = row['close'], row['rsi'], row['lower_bb'], row['ema200']
+            # Pega os últimos valores
+            last = df.iloc[-1]
+            price = last['close']
+            rsi = last['rsi']
+            lower_bb = last['lower_bb']
             
             status = "NEUTRO"
             now = time.time()
@@ -104,6 +111,31 @@ class TradingEngine:
                 # Cálculo do Lucro Atual
                 current_profit_pct = (price - entry_price) / entry_price
                 status = "COMPRADO"
+
+                # --- NOVA LÓGICA: BREAK-EVEN (ESCUDO) ---
+                is_secured = trade.get('secured', False)
+                
+                # 1. Ativa o Escudo se bater 0.6%
+                if self.config.USE_BREAK_EVEN and not is_secured:
+                    if current_profit_pct >= self.config.BREAK_EVEN_TRIGGER:
+                        trade['secured'] = True
+                        self.active_trades[s] = trade
+                        self._save_state()
+                        self.update_queue.put(('log', f"🛡️ BREAK-EVEN ATIVADO: {s} (Trade protegido no 0x0)"))
+                        if self.telegram:
+                            asyncio.create_task(self.telegram.send_notification(f"🛡️ **ESCUDO ATIVADO**\n\nBlindando trade em {s}!\nSe cair, saímos no 0x0."))
+
+                # 2. Executa o Stop (Dinâmico)
+                # Se estiver protegido (secured), o Stop é o preço de entrada (+0.1% para pagar taxas)
+                # Se NÃO estiver protegido, o Stop é o Configurado (1.5%)
+                stop_price = entry_price * 1.001 if is_secured else entry_price * (1 - self.config.STOP_LOSS)
+                
+                if price <= stop_price:
+                    reason = "BREAK_EVEN_EXIT" if is_secured else "STOP_LOSS"
+                    # Pequeno filtro: Se for break-even, só sai se o lucro for realmente baixo/zero
+                    await self._sell(s, price, df, reason=reason)
+                    self.cooldown_list[s] = time.time() + 300
+                    return None
 
                 # --- A. LÓGICA DO TRAILING STOP ---
                 if self.config.USE_TRAILING_STOP:
@@ -149,38 +181,34 @@ class TradingEngine:
                     self.cooldown_list[s] = now + 600 # Cooldown maior para moedas zumbis
                     return None
             
-            # --- LÓGICA DE COMPRA COM TRAVA DE 5 MINUTOS ---
+            # --- LÓGICA DE COMPRA (STRATEGY: GOLDEN ARRAY) ---
             if self.running and s not in self.active_trades:
-                # Verifica se a moeda está no "castigo" de 5 minutos
-                if s in self.cooldown_list:
-                    if now < self.cooldown_list[s]:
-                        remaining = int(self.cooldown_list[s] - now)
-                        status = f"WAIT ({remaining}s)"
-                        return {'symbol': s, 'price': price, 'rsi': rsi, 'df': df, 'status': status, 'trade_info': None}
-                    else:
-                        del self.cooldown_list[s] # Tempo acabou, pode comprar de novo
+                if len(self.active_trades) >= self.config.MAX_OPEN_TRADES: 
+                    status = "NEUTRO (Saturado)"
+                elif s in self.cooldown_list and now < self.cooldown_list[s]:
+                    remaining = int(self.cooldown_list[s] - now)
+                    status = f"WAIT ({remaining}s)"
+                else:
+                    # 1. FILTRO MACRO (SEGURANÇA):
+                    # O preço deve estar acima das "Muralhas" (200 e 500).
+                    is_bull_trend = (price > last['sma_200']) and (price > last['sma_500'])
 
-                # Verificação normal de compra
-                if len(self.active_trades) < self.config.MAX_OPEN_TRADES:
-                    
-                    # --- O NOVO FILTRO EMA ---
-                    trend_ok = True
-                    if self.config.USE_EMA_FILTER:
-                        # Só compra se preço > EMA 200 (Tendência de Alta)
-                        if price < ema_val:
-                            trend_ok = False
-                    
-                    if trend_ok and rsi < self.config.RSI_OVERSOLD and price <= lower_bb * 1.005:
-                        status = "COMPRA!"
-                        # Bloqueio imediato para evitar que outra task entre aqui
-                        # Adicionamos o par temporariamente para ocupar o slot
+                    # 2. FILTRO DE MOMENTO (PULLBACK):
+                    # Queremos comprar barato, então o preço deve ter recuado abaixo das médias curtas.
+                    is_pullback = (price < last['sma_20']) 
+
+                    # GATILHO FINAL:
+                    # Tendência de Alta (Macro) + Recuo (Pullback) + RSI Barato + Bollinger Estourada
+                    if is_bull_trend and is_pullback and rsi < self.config.RSI_OVERSOLD and price <= lower_bb:
+                        status = "COMPRA FORTE"
+                        self.update_queue.put(('log', f"🚀 SINAL FORTE em {s}: Acima da SMA500/200 + RSI {rsi:.1f}"))
                         self.active_trades[s] = {'entry': price, 'status': 'Pendente'} 
                         await self._buy(s, price, df)
-                else:
-                    status = "NEUTRO (Saturado)"
             
             return {'symbol': s, 'price': price, 'rsi': rsi, 'df': df, 'status': status, 'trade_info': self.active_trades.get(s)}
-        except: return None
+        except Exception as e:
+            # self.update_queue.put(('log', f"Erro em {s}: {e}"))
+            return None
 
     async def _sell(self, symbol, price, df=None, reason="PROFIT"):
         try:
